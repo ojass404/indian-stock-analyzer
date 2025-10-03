@@ -151,7 +151,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🚀 Indian Stock Market Analyzer")
+st.title(" Indian Stock Market Analyzer")
 st.markdown("Real-time sector-wise AI recommendations & projections for BSE/NSE (10+ Sectors)")
 
 # Sidebar (now sectors is defined above)
