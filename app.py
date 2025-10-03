@@ -7,7 +7,6 @@ Original file is located at
     https://colab.research.google.com/drive/1VxR0VxTB6G8tAg9cLecqEfoasv2VVAGi
 """
 
-!pip install yfinance plotly streamlit prophet pandas numpy pytz
 
 import yfinance as yf
 import pandas as pd
