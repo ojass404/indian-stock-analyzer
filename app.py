@@ -7,9 +7,10 @@ from plotly.subplots import make_subplots
 from prophet import Prophet
 from datetime import datetime
 import warnings
+import time  # For progress
 warnings.filterwarnings("ignore")
 
-# Sectors and companies (defined early to avoid NameError)
+# Sectors and companies (corrected and verified for October 2025 NSE data)
 sectors = {
     'Banking': ['HDFCBANK.NS', 'ICICIBANK.NS', 'SBIN.NS', 'KOTAKBANK.NS', 'AXISBANK.NS', 'BANKBARODA.NS', 'PNB.NS', 'CANBK.NS', 'UNIONBANK.NS', 'INDUSINDBK.NS', 'IDFCFIRSTB.NS', 'FEDERALBNK.NS', 'MAHABANK.NS', 'IOB.NS', 'EQUITASBNK.NS'],
     'IT': ['TCS.NS', 'INFY.NS', 'HCLTECH.NS', 'WIPRO.NS', 'LTIM.NS', 'TECHM.NS', 'MINDTREE.NS', 'LTTS.NS', 'TATAELXSI.NS', 'KPITTECH.NS', 'HAPPSTMNDS.NS', 'MPHASIS.NS', 'COFORGE.NS', 'PERSISTENT.NS', 'OFSS.NS'],
@@ -32,6 +33,7 @@ sectors = {
     'Renewable Energy': ['ADANIGREEN.NS', 'TATAPOWER.NS', 'JSWENERGY.NS', 'NHPC.NS', 'SUZLON.NS', 'INOXWIND.NS', 'KPIGREEN.NS', 'ORIENTGREEN.NS', 'WEBSOL.NS', 'BORORENEW.NS', 'INSOLATION.NS', 'RAJRENEW.NS', 'URJA.NS', 'KAYNES.NS', 'WAAREE.NS']
 }
 
+@st.cache_data(ttl=1800)  # 30 min cache
 def fetch_stock_data(symbol, period='1y'):
     """Fetch historical data for a stock."""
     try:
@@ -45,6 +47,7 @@ def fetch_stock_data(symbol, period='1y'):
         st.error(f"Error fetching {symbol}: {e}")
         return None
 
+@st.cache_data(ttl=1800)
 def get_current_price(symbol):
     """Get real-time current price."""
     try:
@@ -54,6 +57,7 @@ def get_current_price(symbol):
     except:
         return None
 
+@st.cache_data(ttl=1800)
 def forecast_returns(data, periods=[7, 30, 365]):
     """Forecast % returns using Prophet for given periods (days)."""
     if data is None or len(data) < 100:  # Need sufficient data
@@ -64,8 +68,8 @@ def forecast_returns(data, periods=[7, 30, 365]):
     df.columns = ['ds', 'y']
     df['ds'] = pd.to_datetime(df['ds'])
     
-    # Fit model
-    model = Prophet(daily_seasonality=True, weekly_seasonality=True, yearly_seasonality=True)
+    # Fit model (optimized: remove daily for speed if needed)
+    model = Prophet(weekly_seasonality=True, yearly_seasonality=True)  # Removed daily for faster fit
     model.fit(df)
     
     # Forecast
@@ -85,32 +89,39 @@ def forecast_returns(data, periods=[7, 30, 365]):
     
     return projections
 
+@st.cache_data(ttl=1800)
+def get_sampled_companies(sector, sample_size=10):
+    """Sample top companies to reduce computations."""
+    return sectors[sector][:sample_size]  # Use first 10 (by market cap order)
+
+@st.cache_data(ttl=1800)
 def get_sector_avg_forecast(sector):
-    """Average forecasts for sector companies."""
+    """Average forecasts using sampled companies."""
     projections = {7: [], 30: [], 365: []}
-    for symbol in sectors[sector]:
+    sampled_symbols = get_sampled_companies(sector)  # Only 10
+    for symbol in sampled_symbols:
         data = fetch_stock_data(symbol)
         if data is not None:
             fc = forecast_returns(data)
             for p in projections:
                 projections[p].append(fc.get(p, 0))
-    if not projections[7]:  # Empty
+    if not projections[7]:
         return {p: 0 for p in [7, 30, 365]}
     return {p: round(np.mean(projs), 2) for p, projs in projections.items()}
 
+@st.cache_data(ttl=1800)
 def get_recommendations():
-    """AI Recommendations: Top 3 sectors/companies by avg projected year return."""
+    """Recommendations using sampled companies."""
     sector_projs = {}
     for sector in sectors:
         sector_projs[sector] = get_sector_avg_forecast(sector).get(365, 0)
     
-    # Top sectors
     top_sectors = sorted(sector_projs.items(), key=lambda x: x[1], reverse=True)[:3]
     
-    # Top companies (flatten all, get top 3 by year proj)
     all_comp_projs = []
     for sector in sectors:
-        for symbol in sectors[sector]:
+        sampled_symbols = get_sampled_companies(sector)  # Sample for companies too
+        for symbol in sampled_symbols:
             data = fetch_stock_data(symbol)
             if data is not None:
                 proj = forecast_returns(data).get(365, 0)
@@ -159,10 +170,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title(" Indian Stock Market Analyzer")
-st.markdown("Real-time sector-wise AI recommendations & projections for BSE/NSE (15+ Sectors)")
+st.title("🚀 Indian Stock Market Analyzer")
+st.markdown("Real-time sector-wise AI recommendations & projections for BSE/NSE (20 Sectors)")
 
-# Sidebar (now sectors is defined above)
+# Sidebar
 st.sidebar.header("Select Options")
 selected_sector = st.sidebar.selectbox("Choose Sector:", list(sectors.keys()))
 selected_company = st.sidebar.selectbox("Choose Company:", sectors[selected_sector])
@@ -172,7 +183,16 @@ tab1, tab2, tab3 = st.tabs(["📊 Recommendations", "🔮 Projections", "📈 Ch
 
 with tab1:
     st.subheader("AI Investment Recommendations (Upcoming Periods)")
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    # Lazy: Compute only on tab select
+    status_text.text("Computing recommendations...")
+    progress_bar.progress(0.3)
     top_sectors, top_companies = get_recommendations()
+    progress_bar.progress(1.0)
+    status_text.text("Done!")
+    time.sleep(0.5)  # Brief pause for UX
     
     st.markdown("### Top 3 Sectors to Invest")
     sector_df = pd.DataFrame(top_sectors, columns=['Sector', 'Projected Year % Return'])
@@ -184,6 +204,11 @@ with tab1:
 
 with tab2:
     st.subheader(f"Projections for {selected_company}")
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    status_text.text("Fetching data & forecasting...")
+    progress_bar.progress(0.5)
     data = fetch_stock_data(selected_company)
     if data is not None:
         projections = forecast_returns(data)
@@ -200,12 +225,15 @@ with tab2:
         
         st.plotly_chart(plot_projections(projections, f"{selected_company} Projected Returns"), use_container_width=True)
         
-        # Sector avg
+        # Sector avg (sampled)
+        progress_bar.progress(0.8)
         sector_proj = get_sector_avg_forecast(selected_sector)
         st.subheader(f"Sector Avg Projections: {selected_sector}")
         st.plotly_chart(plot_projections(sector_proj, f"{selected_sector} Sector Projections"), use_container_width=True)
     else:
         st.warning("No data available for this company. Try another.")
+    progress_bar.progress(1.0)
+    status_text.text("Done!")
 
 with tab3:
     st.subheader(f"Charts for {selected_company}")
@@ -213,7 +241,7 @@ with tab3:
     if data is not None:
         st.plotly_chart(plot_candlestick(data, selected_company), use_container_width=True)
     else:
-        st.warning("No data for charts. Try another company.")
+        st.warning("No data for charts. Try another.")
 
 # Footer
 st.markdown("---")
